@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gastos de Casa</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f172a; font-family: system-ui, sans-serif; }
+    select option { background: #0f172a; color: #f1f5f9; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const CATEGORIAS = [
+      { id: "fijos",    label: "Gastos fijos", icon: "🏠", color: "#60a5fa" },
+      { id: "comida",   label: "Comida",        icon: "🛒", color: "#4ade80" },
+      { id: "gasolina", label: "Gasolina",      icon: "⛽", color: "#f59e0b" },
+      { id: "ocio",     label: "Ocio",          icon: "🎬", color: "#a78bfa" },
+      { id: "extras",   label: "Extras",        icon: "📦", color: "#fb7185" },
+    ];
+
+    const PERSONAS  = ["Yo", "Irene", "Ambos"];
+    const MESES     = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    const fmt       = n => n.toFixed(2).replace(".", ",") + " €";
+    const hoy       = () => new Date().toISOString().split("T")[0];
+    const mesActual = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; };
+    const mesPrev   = mv => { const [y,m] = mv.split("-").map(Number); const d = new Date(y,m-2); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; };
+
+    // ── Persistencia en localStorage ──
+    const LS_KEY = "gastos_casa_data";
+    const lsGet  = () => { try { const v = localStorage.getItem(LS_KEY); return v ? JSON.parse(v) : null; } catch { return null; } };
+    const lsSet  = data => { try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch {} };
+
+    const DEMO = [
+      { id:1, desc:"Alquiler",   importe:850,  cat:"fijos",    persona:"Ambos", fecha:hoy(), nota:"" },
+      { id:2, desc:"Luz",        importe:92,   cat:"fijos",    persona:"Ambos", fecha:hoy(), nota:"Factura mes actual" },
+      { id:3, desc:"Mercadona",  importe:87.5, cat:"comida",   persona:"Irene", fecha:hoy(), nota:"" },
+      { id:4, desc:"Lidl",       importe:43,   cat:"comida",   persona:"Yo",    fecha:hoy(), nota:"" },
+      { id:5, desc:"Gasolinera", importe:55,   cat:"gasolina", persona:"Yo",    fecha:hoy(), nota:"Repostaje completo" },
+      { id:6, desc:"Netflix",    importe:17.99,cat:"ocio",     persona:"Ambos", fecha:hoy(), nota:"" },
+      { id:7, desc:"Cena fuera", importe:62,   cat:"ocio",     persona:"Ambos", fecha:hoy(), nota:"Aniversario" },
+      { id:8, desc:"Farmacia",   importe:28,   cat:"extras",   persona:"Irene", fecha:hoy(), nota:"" },
+    ];
+
+    const DEMO_PREV = (() => {
+      const [y,m] = mesActual().split("-").map(Number);
+      const d = new Date(y, m-2);
+      const p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      return [
+        { id:101, desc:"Alquiler",   importe:850, cat:"fijos",    persona:"Ambos", fecha:`${p}-01`, nota:"" },
+        { id:102, desc:"Luz",        importe:78,  cat:"fijos",    persona:"Ambos", fecha:`${p}-05`, nota:"" },
+        { id:103, desc:"Mercadona",  importe:95,  cat:"comida",   persona:"Irene", fecha:`${p}-10`, nota:"" },
+        { id:104, desc:"Gasolinera", importe:48,  cat:"gasolina", persona:"Yo",    fecha:`${p}-12`, nota:"" },
+        { id:105, desc:"Cine",       importe:24,  cat:"ocio",     persona:"Ambos", fecha:`${p}-15`, nota:"" },
+        { id:106, desc:"Médico",     importe:55,  cat:"extras",   persona:"Yo",    fecha:`${p}-18`, nota:"" },
+      ];
+    })();
+
+    function App() {
+      const [gastos,      setGastos]      = useState([]);
+      const [vista,       setVista]       = useState("inicio");
+      const [mesVista,    setMesVista]    = useState(mesActual());
+      const [catDetalle,  setCatDetalle]  = useState(null);
+      const [form,        setForm]        = useState({ desc:"", importe:"", cat:"fijos", persona:"Yo", fecha:hoy(), nota:"" });
+      const [editId,      setEditId]      = useState(null);
+      const [presupuesto, setPresupuesto] = useState(2000);
+      const [editPresup,  setEditPresup]  = useState(false);
+      const [tempPresup,  setTempPresup]  = useState(2000);
+      const [toast,       setToast]       = useState(null);
+
+      const showToast = (msg, tipo="ok") => { setToast({msg,tipo}); setTimeout(()=>setToast(null),2500); };
+
+      // Carga inicial desde localStorage
+      useEffect(() => {
+        const saved = lsGet();
+        if (saved) {
+          setGastos(saved.gastos || [...DEMO, ...DEMO_PREV]);
+          setPresupuesto(saved.presupuesto || 2000);
+        } else {
+          setGastos([...DEMO, ...DEMO_PREV]);
+        }
+      }, []);
+
+      const save = (ng, np) => lsSet({ gastos: ng, presupuesto: np });
+
+      const mp          = mesPrev(mesVista);
+      const gastosMes   = useMemo(() => gastos.filter(g => g.fecha.startsWith(mesVista)), [gastos, mesVista]);
+      const gastosPrev  = useMemo(() => gastos.filter(g => g.fecha.startsWith(mp)),       [gastos, mp]);
+      const totalMes    = useMemo(() => gastosMes.reduce((s,g) => s+g.importe, 0),        [gastosMes]);
+
+      const totalesCat = useMemo(() => {
+        const cur={}, prev={};
+        CATEGORIAS.forEach(c => { cur[c.id]=0; prev[c.id]=0; });
+        gastosMes.forEach(g  => { cur[g.cat]  = (cur[g.cat]  ||0) + g.importe; });
+        gastosPrev.forEach(g => { prev[g.cat] = (prev[g.cat] ||0) + g.importe; });
+        return { cur, prev };
+      }, [gastosMes, gastosPrev]);
+
+      const agregarGasto = () => {
+        if (!form.desc.trim() || !form.importe || isNaN(parseFloat(form.importe)))
+          return showToast("Rellena descripción e importe","err");
+        const nuevo = {...form, importe:parseFloat(form.importe), id:Date.now()};
+        const next  = editId ? gastos.map(g => g.id===editId ? {...nuevo,id:editId} : g) : [nuevo,...gastos];
+        setGastos(next); save(next, presupuesto);
+        setForm({desc:"",importe:"",cat:"fijos",persona:"Yo",fecha:hoy(),nota:""});
+        setEditId(null); setVista("lista");
+        showToast(editId ? "Gasto actualizado ✓" : "Gasto añadido ✓");
+      };
+
+      const borrar = id => {
+        if (!confirm("¿Borrar este gasto?")) return;
+        const next = gastos.filter(g => g.id!==id);
+        setGastos(next); save(next, presupuesto);
+        showToast("Gasto eliminado");
+      };
+
+      const editar = g => {
+        setForm({desc:g.desc,importe:String(g.importe),cat:g.cat,persona:g.persona,fecha:g.fecha,nota:g.nota});
+        setEditId(g.id); setVista("añadir");
+      };
+
+      const guardarPresup = () => {
+        const v = parseFloat(tempPresup);
+        if (isNaN(v)||v<=0) return;
+        setPresupuesto(v); save(gastos,v); setEditPresup(false);
+        showToast("Presupuesto actualizado ✓");
+      };
+
+      const cambiarMes = d => {
+        const [y,m] = mesVista.split("-").map(Number);
+        const nd = new Date(y, m-1+d);
+        setMesVista(`${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}`);
+      };
+
+      const catInfo = id => CATEGORIAS.find(c=>c.id===id) || CATEGORIAS[4];
+
+      const pct      = Math.min((totalMes/presupuesto)*100, 100);
+      const pctColor = pct>90?"#f87171":pct>70?"#fb923c":"#4ade80";
+      const [mesY,mesM]   = mesVista.split("-").map(Number);
+      const [prevY,prevM] = mp.split("-").map(Number);
+      const mesLabel  = `${MESES[mesM-1]}  ${mesY}`;
+      const prevLabel = `${MESES[prevM-1]} ${prevY}`;
+
+      const S = {
+        app:  {fontFamily:"system-ui,sans-serif",background:"#0f172a",minHeight:"100vh",color:"#f1f5f9",paddingBottom:80},
+        hdr:  {background:"linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%)",padding:"20px 20px 16px",textAlign:"center"},
+        h1:   {margin:0,fontSize:22,fontWeight:700},
+        sub:  {margin:"4px 0 0",fontSize:13,opacity:.85},
+        nav:  {position:"fixed",bottom:0,left:0,right:0,background:"#1e293b",borderTop:"1px solid #334155",display:"flex",justifyContent:"space-around",padding:"10px 0 14px",zIndex:99},
+        card: {background:"#1e293b",borderRadius:14,padding:16,margin:"12px 16px 0"},
+        lbl:  {fontSize:12,color:"#94a3b8",marginBottom:4},
+        inp:  {width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:8,padding:"10px 12px",color:"#f1f5f9",fontSize:15,boxSizing:"border-box",fontFamily:"system-ui"},
+        sel:  {width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:8,padding:"10px 12px",color:"#f1f5f9",fontSize:15,boxSizing:"border-box",fontFamily:"system-ui"},
+        btn:  (c="#6366f1")=>({background:c,color:"#fff",border:"none",borderRadius:10,padding:"12px 20px",fontSize:15,fontWeight:600,cursor:"pointer",width:"100%",fontFamily:"system-ui"}),
+        row:  {display:"flex",alignItems:"center",gap:10,background:"#0f172a",borderRadius:10,padding:"10px 12px",marginBottom:8},
+        chip: (c)=>({background:c+"22",color:c,borderRadius:20,padding:"2px 8px",fontSize:11,fontWeight:600}),
+        barO: {background:"#0f172a",borderRadius:99,height:8,overflow:"hidden",margin:"6px 0 2px"},
+        barI: (p,c)=>({width:p+"%",background:c,height:"100%",borderRadius:99,transition:"width .4s"}),
+        toast:(t)=>({position:"fixed",bottom:90,left:"50%",transform:"translateX(-50%)",background:t==="err"?"#ef4444":"#22c55e",color:"#fff",padding:"10px 20px",borderRadius:10,fontSize:14,fontWeight:600,zIndex:200,whiteSpace:"nowrap"}),
+        mesN: {display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4},
+        mesB: {background:"#334155",border:"none",color:"#f1f5f9",borderRadius:8,padding:"4px 12px",cursor:"pointer",fontSize:18},
+        navB: (v)=>({background:"none",border:"none",color:vista===v?"#818cf8":"#64748b",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"4px 12px",fontFamily:"system-ui"}),
+      };
+
+      // ── DETALLE CATEGORÍA ──
+      if (catDetalle) {
+        const ci        = catInfo(catDetalle);
+        const items     = gastosMes.filter(g => g.cat===catDetalle).sort((a,b)=>b.importe-a.importe);
+        const itemsPrev = gastosPrev.filter(g => g.cat===catDetalle);
+        const totalCur  = items.reduce((s,g)=>s+g.importe, 0);
+        const totalPrev = itemsPrev.reduce((s,g)=>s+g.importe, 0);
+        const diff      = totalCur - totalPrev;
+        const diffPct   = totalPrev>0 ? ((diff/totalPrev)*100).toFixed(0) : null;
+        const diffColor = diff>0?"#f87171":diff<0?"#4ade80":"#94a3b8";
+        const diffSign  = diff>0?"▲":diff<0?"▼":"=";
+
+        return (
+          <div style={S.app}>
+            {toast && <div style={S.toast(toast.tipo)}>{toast.msg}</div>}
+            <div style={{...S.hdr, paddingTop:14}}>
+              <button onClick={()=>setCatDetalle(null)} style={{background:"none",border:"none",color:"#fff",fontSize:22,cursor:"pointer",float:"left",padding:0}}>‹</button>
+              <div style={S.h1}>{ci.icon} {ci.label}</div>
+              <div style={S.sub}>{mesLabel}</div>
+            </div>
+
+            <div style={S.card}>
+              <div style={{fontSize:13,color:"#94a3b8",marginBottom:12,fontWeight:600}}>COMPARATIVA MENSUAL</div>
+              <div style={{display:"flex",gap:10,marginBottom:14}}>
+                <div style={{flex:1,background:"#0f172a",borderRadius:10,padding:12,textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>{mesLabel}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:ci.color}}>{fmt(totalCur)}</div>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+                  <span style={{fontSize:20,color:diffColor}}>{diffSign}</span>
+                  {diffPct && <span style={{fontSize:11,color:diffColor,fontWeight:700}}>{Math.abs(diffPct)}%</span>}
+                </div>
+                <div style={{flex:1,background:"#0f172a",borderRadius:10,padding:12,textAlign:"center",opacity:.7}}>
+                  <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>{prevLabel}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:"#64748b"}}>{fmt(totalPrev)}</div>
+                </div>
+              </div>
+              <div style={{fontSize:12,color:"#94a3b8",marginBottom:6}}>
+                {diff>0 ? `${fmt(Math.abs(diff))} más que el mes anterior` :
+                 diff<0 ? `${fmt(Math.abs(diff))} menos que el mes anterior` :
+                 "Igual que el mes anterior"}
+              </div>
+              {totalPrev>0 && (
+                <div>
+                  <div style={{fontSize:11,color:"#64748b",marginBottom:3}}>{prevLabel}</div>
+                  <div style={S.barO}><div style={S.barI(100,"#475569")}/></div>
+                  <div style={{fontSize:11,color:"#64748b",marginBottom:3,marginTop:6}}>{mesLabel}</div>
+                  <div style={S.barO}><div style={S.barI(Math.min((totalCur/totalPrev)*100,150),ci.color)}/></div>
+                </div>
+              )}
+            </div>
+
+            <div style={S.card}>
+              <div style={{fontSize:13,color:"#94a3b8",marginBottom:12,fontWeight:600}}>GASTOS DE {mesLabel.toUpperCase()} ({items.length})</div>
+              {items.length===0 && <div style={{color:"#64748b",fontSize:14}}>Sin gastos esta categoría</div>}
+              {items.map(g => (
+                <div key={g.id} style={{background:"#0f172a",borderRadius:12,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:14}}>{g.desc}</div>
+                    <div style={{fontSize:12,color:"#64748b"}}>{g.fecha} · <span style={S.chip("#818cf8")}>{g.persona}</span></div>
+                    {g.nota && <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>📝 {g.nota}</div>}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
+                    <span style={{fontWeight:800,fontSize:16,color:ci.color}}>{fmt(g.importe)}</span>
+                    <div style={{display:"flex",gap:4}}>
+                      <button onClick={()=>{editar(g);setCatDetalle(null);}} style={{background:"#334155",border:"none",borderRadius:6,color:"#94a3b8",padding:"3px 8px",cursor:"pointer",fontSize:13}}>✏️</button>
+                      <button onClick={()=>borrar(g.id)} style={{background:"#450a0a",border:"none",borderRadius:6,color:"#f87171",padding:"3px 8px",cursor:"pointer",fontSize:13}}>🗑️</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {itemsPrev.length>0 && (
+              <div style={S.card}>
+                <div style={{fontSize:13,color:"#94a3b8",marginBottom:12,fontWeight:600}}>GASTOS DE {prevLabel.toUpperCase()} ({itemsPrev.length})</div>
+                {itemsPrev.map(g => (
+                  <div key={g.id} style={{background:"#0f172a",borderRadius:10,padding:"8px 12px",marginBottom:6,opacity:.7,display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:600,fontSize:13}}>{g.desc}</div>
+                      <div style={{fontSize:11,color:"#64748b"}}>{g.fecha} · {g.persona}</div>
+                    </div>
+                    <span style={{fontWeight:700,fontSize:14,color:"#64748b"}}>{fmt(g.importe)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{height:30}}/>
+          </div>
+        );
+      }
+
+      // ── VISTAS PRINCIPALES ──
+      return (
+        <div style={S.app}>
+          {toast && <div style={S.toast(toast.tipo)}>{toast.msg}</div>}
+
+          <div style={S.hdr}>
+            <div style={S.h1}>🏡 Gastos de Casa</div>
+            <div style={S.sub}>Tú e Irene · {mesLabel}</div>
+          </div>
+
+          {/* INICIO */}
+          {vista==="inicio" && (
+            <div>
+              <div style={S.card}>
+                <div style={S.mesN}>
+                  <button style={S.mesB} onClick={()=>cambiarMes(-1)}>‹</button>
+                  <span style={{fontWeight:700,fontSize:16}}>{mesLabel}</span>
+                  <button style={S.mesB} onClick={()=>cambiarMes(1)}>›</button>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                  <span style={{fontSize:13,color:"#94a3b8"}}>Presupuesto mensual</span>
+                  {editPresup ? (
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <input type="number" value={tempPresup} onChange={e=>setTempPresup(e.target.value)}
+                        style={{...S.inp,width:90,padding:"4px 8px",fontSize:14}}/>
+                      <button onClick={guardarPresup} style={{...S.btn(),width:"auto",padding:"4px 12px",fontSize:13}}>OK</button>
+                    </div>
+                  ) : (
+                    <span style={{fontWeight:700,color:"#818cf8",cursor:"pointer"}} onClick={()=>{setTempPresup(presupuesto);setEditPresup(true);}}>
+                      {fmt(presupuesto)} ✏️
+                    </span>
+                  )}
+                </div>
+                <div style={S.barO}><div style={S.barI(pct,pctColor)}/></div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                  <span style={{color:pctColor,fontWeight:700}}>{fmt(totalMes)} gastado</span>
+                  <span style={{color:"#64748b"}}>{fmt(presupuesto-totalMes)} restante</span>
+                </div>
+              </div>
+
+              <div style={S.card}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:12,color:"#94a3b8"}}>Por categoría · toca para ver detalle</div>
+                {CATEGORIAS.map(ci => {
+                  const cur  = totalesCat.cur[ci.id]  || 0;
+                  const prev = totalesCat.prev[ci.id] || 0;
+                  const diff = cur - prev;
+                  const pBar = totalMes>0 ? (cur/totalMes)*100 : 0;
+                  const diffColor = diff>0?"#f87171":diff<0?"#4ade80":"#64748b";
+                  const diffSign  = diff>0?"▲":diff<0?"▼":"";
+                  return (
+                    <div key={ci.id} onClick={()=>setCatDetalle(ci.id)}
+                      style={{background:"#0f172a",borderRadius:12,padding:"12px 14px",marginBottom:10,cursor:"pointer",border:"1px solid #1e293b"}}
+                      onMouseEnter={e=>e.currentTarget.style.border="1px solid "+ci.color+"55"}
+                      onMouseLeave={e=>e.currentTarget.style.border="1px solid #1e293b"}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                        <span style={{fontWeight:700,fontSize:14}}>{ci.icon} {ci.label}</span>
+                        <div style={{textAlign:"right"}}>
+                          <span style={{fontWeight:800,fontSize:15,color:ci.color}}>{fmt(cur)}</span>
+                          {prev>0 && (
+                            <span style={{fontSize:11,color:diffColor,marginLeft:6,fontWeight:700}}>
+                              {diffSign} {fmt(Math.abs(diff))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={S.barO}><div style={S.barI(pBar,ci.color)}/></div>
+                      {prev>0 && (
+                        <div style={{fontSize:11,color:"#475569",marginTop:3}}>
+                          {prevLabel}: {fmt(prev)}
+                          {diffColor!=="#64748b" && <span style={{color:diffColor,marginLeft:4}}>({diff>0?"+":""}{((diff/prev)*100).toFixed(0)}%)</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={S.card}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:10,color:"#94a3b8"}}>Últimos gastos</div>
+                {gastosMes.slice(0,5).map(g => {
+                  const ci = catInfo(g.cat);
+                  return (
+                    <div key={g.id} style={S.row}>
+                      <span style={{fontSize:22}}>{ci.icon}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:600,fontSize:14}}>{g.desc}</div>
+                        <div style={{fontSize:12,color:"#64748b"}}>{g.fecha} · {g.persona}</div>
+                      </div>
+                      <span style={{fontWeight:700,color:ci.color}}>{fmt(g.importe)}</span>
+                    </div>
+                  );
+                })}
+                {gastosMes.length>5 && (
+                  <button onClick={()=>setVista("lista")} style={{...S.btn("#334155"),marginTop:4,fontSize:13}}>
+                    Ver todos ({gastosMes.length})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* LISTA */}
+          {vista==="lista" && (
+            <div>
+              <div style={{...S.card,padding:"12px 16px"}}>
+                <div style={S.mesN}>
+                  <button style={S.mesB} onClick={()=>cambiarMes(-1)}>‹</button>
+                  <span style={{fontWeight:700,fontSize:15}}>{mesLabel} · {fmt(totalMes)}</span>
+                  <button style={S.mesB} onClick={()=>cambiarMes(1)}>›</button>
+                </div>
+              </div>
+              <div style={{margin:"0 16px"}}>
+                {gastosMes.length===0 && <div style={{...S.card,textAlign:"center",color:"#64748b"}}>Sin gastos este mes</div>}
+                {gastosMes.map(g => {
+                  const ci = catInfo(g.cat);
+                  return (
+                    <div key={g.id} style={{background:"#1e293b",borderRadius:12,padding:12,marginTop:8,display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:24}}>{ci.icon}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:600,fontSize:14}}>{g.desc}</div>
+                        <div style={{fontSize:12,color:"#64748b"}}>{g.fecha}</div>
+                        {g.nota && <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>📝 {g.nota}</div>}
+                        <div style={{marginTop:4}}>
+                          <span style={S.chip(ci.color)}>{ci.icon} {ci.label}</span>
+                          {" "}
+                          <span style={S.chip("#818cf8")}>{g.persona}</span>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                        <span style={{fontWeight:800,fontSize:16,color:ci.color}}>{fmt(g.importe)}</span>
+                        <div style={{display:"flex",gap:4}}>
+                          <button onClick={()=>editar(g)} style={{background:"#334155",border:"none",borderRadius:6,color:"#94a3b8",padding:"3px 8px",cursor:"pointer",fontSize:13}}>✏️</button>
+                          <button onClick={()=>borrar(g.id)} style={{background:"#450a0a",border:"none",borderRadius:6,color:"#f87171",padding:"3px 8px",cursor:"pointer",fontSize:13}}>🗑️</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* AÑADIR */}
+          {vista==="añadir" && (
+            <div style={S.card}>
+              <div style={{fontSize:17,fontWeight:700,marginBottom:16}}>
+                {editId ? "✏️ Editar gasto" : "➕ Nuevo gasto"}
+              </div>
+              {[
+                {label:"Descripción",key:"desc",type:"text",placeholder:"Ej: Mercadona"},
+                {label:"Importe (€)",key:"importe",type:"number",placeholder:"0.00"},
+                {label:"Fecha",key:"fecha",type:"date"},
+                {label:"Nota (opcional)",key:"nota",type:"text",placeholder:"Añade un comentario..."},
+              ].map(({label,key,type,placeholder}) => (
+                <div key={key} style={{marginBottom:14}}>
+                  <div style={S.lbl}>{label}</div>
+                  <input type={type} placeholder={placeholder} value={form[key]}
+                    onChange={e=>setForm(f=>({...f,[key]:e.target.value}))} style={S.inp}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <div style={S.lbl}>Categoría</div>
+                <select value={form.cat} onChange={e=>setForm(f=>({...f,cat:e.target.value}))} style={S.sel}>
+                  {CATEGORIAS.map(c=><option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:20}}>
+                <div style={S.lbl}>¿Quién paga?</div>
+                <div style={{display:"flex",gap:8}}>
+                  {PERSONAS.map(p => (
+                    <button key={p} onClick={()=>setForm(f=>({...f,persona:p}))}
+                      style={{flex:1,padding:"10px 4px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"system-ui",
+                        background:form.persona===p?"#6366f1":"#334155",
+                        color:form.persona===p?"#fff":"#94a3b8"}}>
+                      {p==="Yo"?"👤 Yo":p==="Irene"?"👩 Irene":"👫 Ambos"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={agregarGasto} style={S.btn()}>
+                {editId ? "Guardar cambios" : "Añadir gasto"}
+              </button>
+              {editId && (
+                <button onClick={()=>{setEditId(null);setForm({desc:"",importe:"",cat:"fijos",persona:"Yo",fecha:hoy(),nota:""});setVista("lista");}}
+                  style={{...S.btn("#334155"),marginTop:8}}>Cancelar</button>
+              )}
+            </div>
+          )}
+
+          <nav style={S.nav}>
+            {[{id:"inicio",icon:"📊",label:"Inicio"},{id:"lista",icon:"📋",label:"Lista"},{id:"añadir",icon:"➕",label:"Añadir"}].map(({id,icon,label})=>(
+              <button key={id} style={S.navB(id)} onClick={()=>{
+                if(id==="añadir"&&editId){setEditId(null);setForm({desc:"",importe:"",cat:"fijos",persona:"Yo",fecha:hoy(),nota:""});}
+                setVista(id);
+              }}>
+                <span style={{fontSize:22}}>{icon}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
